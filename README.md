@@ -374,37 +374,24 @@ export APPRISE_TEMPLATE_API_KEY=your-secret-key
 apprise --config=apprise.yml --tag=alerts --body="Hello"
 ```
 
-A URL still missing a value is not loaded; the others are still notified and
-Apprise exits with a status of `4`. Add `--dry-run` to see what a
-configuration is still waiting for without sending anything.
+A service missing a required value is skipped while other services continue;
+Apprise then exits with status `4`. Use `--dry-run` to check required values
+without sending anything.
 
-`${NAME}` only means something when `NAME` is declared in the `template:`
-section. Anywhere else it is ordinary text, so a password containing `${...}`
-is never touched. Names ignore case, a name may be used as often as you like,
-and this applies to YAML configuration only; TEXT configuration is passed
-through unchanged. Extra supplied names are accepted and ignored; the local
-debug log identifies their names without recording their values.
+Only names declared under `template:` are replaced. Names ignore case, values
+keep their original case, and undeclared `${...}` text remains unchanged. This
+prevents similar text in an existing password from being replaced by accident.
+Extra supplied names are accepted and ignored.
 
-The configuration author may place a variable directly in a URL or in a named
-YAML setting below it. URL placement is intentionally unrestricted, supporting
-email addresses, `user:pass`, comma-separated targets, and other forms a
-service understands. Because punctuation may affect that field, use a named
-setting when an untrusted caller should control only one specific option.
+Variables may be placed directly in a URL or in a named YAML setting. URL
+placement is flexible, including email addresses, `user:pass`, and
+comma-separated targets. Use a named setting when a caller should control only
+one option.
 
-A variable may not appear before `://`, may not be used for `tag:`/`tags:`, and
-may not be used as a setting's name. Which service is used, and who is
-notified, are settled before values are filled in. Tags select the entries to
-resolve, so allowing a value to change a tag would create a circular lookup.
-
-Templates can be switched off for a whole installation through the asset:
-
-```python
-asset = apprise.AppriseAsset(allow_templates=False)
-```
-
-Configurations are then read exactly as they were before templates existed: a
-`template:` section is ignored, `${NAME}` is ordinary text, and nothing is read
-from the environment. Template-specific comparisons and warnings are skipped.
+Variables cannot replace the service before `://`, a setting name, or a
+`tag:`/`tags:` value. Services and tags must be known before values are filled
+in. Template variables apply only to YAML configuration; TEXT configuration
+is unchanged.
 
 ## CLI Tagging Support
 
@@ -602,6 +589,37 @@ apobj.notify(
     tag='all',
 )
 ```
+
+## API Template Variables
+
+After loading a templated YAML configuration, developers can supply its values
+when sending:
+
+```python
+apobj.notify(
+    body='what a great notification service!',
+    title='my notification title',
+    template={'api_key': 'your-secret-key'},
+)
+```
+
+The per-call mapping takes priority over `APPRISE_TEMPLATE_<NAME>` environment
+variables and defaults in the YAML file. Names are case-insensitive, and extra
+names are accepted and ignored.
+
+Templates are enabled by default. To turn them off, use the same disabled asset
+for the configuration and its Apprise object:
+
+```python
+asset = apprise.AppriseAsset(allow_templates=False)
+config = apprise.AppriseConfig(asset=asset)
+apobj = apprise.Apprise(asset=asset)
+apobj.add(config)
+```
+
+When disabled, the `template:` section and template environment variables are
+ignored, and `${NAME}` remains unchanged. A configuration cannot enable this
+feature itself.
 
 ## API File Attachments
 
