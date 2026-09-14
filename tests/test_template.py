@@ -195,7 +195,7 @@ def test_template_rejects_loop():
 
 
 def test_template_avoids_placeholder_collision():
-    """A placeholder can not collide with the configuration."""
+    """A placeholder cannot collide with the configuration."""
     placeholders = TemplatePlaceholderMap(schema_of("a"), "")
     assert f"a{placeholders.nonce}" not in "some configuration body"
 
@@ -235,7 +235,7 @@ def test_template_supplied_name_case_insensitive():
     assert resolve_values(schema, {"TaRgEt": "x"}, {}) == {"target": "x"}
 
 
-def test_template_ignores_another_configurations_name():
+def test_template_ignores_unrelated_name():
     """Each configuration ignores names that it does not use."""
     schema = schema_of({"target": "a-default"})
     values = resolve_values(schema, {"target": "x", "elsewhere": "y"}, {})
@@ -266,7 +266,7 @@ def test_template_rejects_control_character(value):
 
 
 def test_template_value_length_limit():
-    """Values are capped so a caller can not flood the parser."""
+    """Cap values so a caller cannot flood the parser."""
     with pytest.raises(AppriseTemplateError):
         validate_value("target", "x" * (MAX_TEMPLATE_VALUE_LEN + 1))
 
@@ -292,7 +292,7 @@ def test_template_converts_scalar_value(value, expected):
     ["${" * 50000, "$" * 200000, "${A" * 20000, "${" * 10000 + "}" * 10000],
 )
 def test_template_regex_performance(payload):
-    """The pattern is bounded, so it can not be made to hang."""
+    """Bound the pattern so input cannot make it hang."""
     placeholders = TemplatePlaceholderMap(schema_of("a"), "")
     start = time.monotonic()
     placeholders.encode(payload)
@@ -455,7 +455,7 @@ def test_template_allows_a_complete_email_host():
     assert result["host"] == "example.com"
 
 
-def test_template_allows_credentials_in_a_complete_authority():
+def test_template_allows_full_authority_credentials():
     """A whole authority may carry user:pass@host."""
     placeholders = TemplatePlaceholderMap(schema_of("a"), "")
     parsed = {
@@ -504,7 +504,7 @@ def test_template_leaves_a_setting_value_alone():
     assert result["bcc"] == "b64/secret@host&x"
 
 
-def test_template_setting_name_check_skips_non_text_keys():
+def test_template_ignores_non_text_setting_keys():
     """YAML allows a number as a key; there is nothing to look at."""
     placeholders = TemplatePlaceholderMap(schema_of("a"), "")
     assert placeholders.keys_contain_placeholder({1: "x", 2.5: "y"}) is None

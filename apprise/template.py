@@ -333,8 +333,8 @@ class NotifyTemplate:
     def resolve(self, values: dict) -> Any:
         """Build the real service using the values handed in.
 
-        Returns the service, or None when it could not be built.  The
-        reason is logged locally.
+        Returns the service, or ``None`` after logging why it could not be
+        built.
         """
 
         # Reuse a previously built service when all supplied values match.

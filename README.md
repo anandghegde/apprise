@@ -363,6 +363,9 @@ Apprise looks for each value in this order and stops at the first answer:
 2. the environment variable `APPRISE_TEMPLATE_<NAME>`
 3. the default written in the `template:` section
 
+An empty value answers at any of these steps, so `APPRISE_TEMPLATE_API_KEY=`
+leaves `${API_KEY}` blank instead of falling back to the default.
+
 ```bash
 # Supply it directly
 apprise --config=apprise.yml --tag=alerts \
@@ -379,14 +382,24 @@ Apprise then exits with status `4`. Use `--dry-run` to check required values
 without sending anything.
 
 Only names declared under `template:` are replaced. Names ignore case, values
-keep their original case, and undeclared `${...}` text remains unchanged. This
-prevents similar text in an existing password from being replaced by accident.
-Extra supplied names are accepted and ignored.
+keep their original case, and each value may be up to 1,024 characters.
+Undeclared `${...}` text remains unchanged, preventing similar text in an
+existing password from being replaced by accident. Extra supplied names are
+accepted and ignored.
 
 Variables may be placed directly in a URL or in a named YAML setting. URL
 placement is flexible, including email addresses, `user:pass`, and
-comma-separated targets. Use a named setting when a caller should control only
-one option.
+comma-separated targets. A variable standing for the whole host also
+understands `user@host` and `user:pass@host`, filling in those fields for you
+unless the URL already spells out its own credentials. Use a named setting when
+a caller should control only one option.
+
+The two placements differ in reach. A variable in the URL can fill in any field,
+the host included, and everything else that URL holds travels to whichever host
+the finished URL points at. A variable in a named setting only ever reaches that
+one option. Apprise deliberately does not restrict URL placement, giving trusted
+administrators full control. Use a named setting when a value may come from an
+untrusted caller or should affect only one option.
 
 Variables cannot replace the service before `://`, a setting name, or a
 `tag:`/`tags:` value. Services and tags must be known before values are filled

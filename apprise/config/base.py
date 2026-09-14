@@ -261,11 +261,10 @@ def _yaml_key_label(key) -> str:
 def _templated_key(
     obj: object, schema: TemplateSchema, memo=None
 ) -> str | None:
-    """Return a declared variable used as a setting name, if there is one.
+    """Return a declared variable used as a setting name, if any.
 
-    A variable fills in a value; it never decides what a setting is
-    called.  Setting names are read before anything is swapped out, so
-    this looks for the ``${NAME}`` markers as the author wrote them.
+    Variables may fill setting values, but may not choose setting names.
+    This scans the original ``${NAME}`` markers before substitution.
     """
 
     if not schema:
@@ -1168,11 +1167,16 @@ class ConfigBase(URLBase):
         # Track our entries to preload
         preloaded = []
 
-        loader = None
         try:
             # Keep the parsed YAML nodes long enough to report useful lines.
             loader = _AppriseYamlLoader(content)
-            result = loader.get_single_data()
+            try:
+                result = loader.get_single_data()
+
+            finally:
+                # Only reached once the loader exists, so there is always
+                # something to tidy up here.
+                loader.dispose()
 
         except (
             AttributeError,
@@ -1183,10 +1187,6 @@ class ConfigBase(URLBase):
             ConfigBase.logger.error("Invalid Apprise YAML data specified.")
             ConfigBase.logger.debug(f"YAML Exception:{os.linesep}{e}")
             return ([], [])
-
-        finally:
-            if loader is not None:
-                loader.dispose()
 
         # The host decides whether this configuration may use templates.
         asset = asset if isinstance(asset, AppriseAsset) else AppriseAsset()

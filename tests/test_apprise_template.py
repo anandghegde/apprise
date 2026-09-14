@@ -24,10 +24,16 @@
 # CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
-"""Tests for template variables end to end."""
+"""Tests for template variables end to end.
+
+Where a variable may be written, and what each placement can reach, is
+covered separately in ``test_apprise_template_placement.py``.
+"""
 
 # Disable logging for a cleaner testing output
+from collections import UserDict
 import logging
+from types import MappingProxyType
 from unittest import mock
 
 import pytest
@@ -35,6 +41,7 @@ import requests
 
 from apprise import Apprise, AppriseAsset, AppriseConfig, NotifyTemplate
 from apprise.config import ConfigBase
+from apprise.exception import AppriseTemplateError
 from apprise.result import AppriseResultStatus
 
 
@@ -74,7 +81,7 @@ def sent():
 
 
 def test_apprise_template_deferred_entry():
-    """The service can not be built while a value is missing."""
+    """The service cannot be built while a value is missing."""
     services = parse(
         "version: 2\ntemplate:\n  - target\n"
         "urls:\n  - json://localhost/?to=${TARGET}\n"
@@ -326,7 +333,7 @@ def test_apprise_template_service_reuse(sent):
 
 
 def test_apprise_template_cache_limit():
-    """A caller sending new values each time can not grow it."""
+    """A caller sending new values each time cannot grow it."""
     from apprise.template import MAX_RESOLVE_CACHE
 
     entry = parse(
@@ -854,7 +861,7 @@ def test_apprise_template_setting_value_is_left_alone(value, sent):
 
 @pytest.mark.parametrize("value", VALUES)
 def test_apprise_template_query_value_adds_no_parameter(value, sent):
-    """An "&" in a value can not become another parameter."""
+    """An "&" in a value cannot become another parameter."""
     apobj = load("template:\n  - v\nurls:\n  - json://host/?:custom=${V}\n")
     control = load("template:\n  - v\nurls:\n  - json://host/?:custom=${V}\n")
 
@@ -958,7 +965,7 @@ def test_apprise_template_unknown_name_does_not_change_status(sent):
     assert result.status == AppriseResultStatus.SUCCESS
 
 
-def test_apprise_template_unknown_name_stays_out_of_the_capture(
+def test_apprise_template_hides_unknown_name_from_capture(
     sent, logging_enabled
 ):
     """The names must not reach whoever asked for the notification."""
@@ -974,7 +981,7 @@ def test_apprise_template_unknown_name_stays_out_of_the_capture(
     assert "a_secret_name" not in blob
 
 
-def test_apprise_template_unknown_name_is_acknowledged_locally(sent, caplog):
+def test_apprise_template_logs_unknown_name_locally(sent, caplog):
     """The local debug log names unused inputs without logging values."""
     with caplog.at_level(logging.DEBUG):
         list(
@@ -1021,9 +1028,7 @@ def test_apprise_template_can_be_switched_off(sent):
     assert apobj.template_vars() == {}
 
 
-def test_apprise_template_switched_off_ignores_the_environment(
-    sent, monkeypatch
-):
+def test_apprise_template_disabled_ignores_environment(sent, monkeypatch):
     """A value in the environment must not quietly take effect."""
     monkeypatch.setenv("APPRISE_TEMPLATE_V", "from-env")
     asset = AppriseAsset(allow_templates=False)
@@ -1175,8 +1180,8 @@ def test_apprise_template_url_without_a_path():
     assert "${T}" in entry.url()
 
 
-def test_apprise_template_invalid_declaration_refuses_the_file(caplog):
-    """A template section that can not be read stops the whole file."""
+def test_apprise_template_invalid_declaration_refuses_file(caplog):
+    """An unreadable template section stops the whole file."""
     with caplog.at_level(logging.ERROR):
         services = parse(
             "template:\n  - name\n  - NAME\nurls:\n  - json://localhost/\n"
@@ -1203,7 +1208,7 @@ def test_apprise_template_unusable_placeholder_prefix(caplog):
     assert services == []
 
 
-def test_apprise_template_setting_name_in_the_mapping_form(caplog):
+def test_apprise_template_mapping_form_setting_name(caplog):
     """A variable may not name a setting written beside a URL."""
     with caplog.at_level(logging.ERROR):
         services = parse(
@@ -1215,7 +1220,7 @@ def test_apprise_template_setting_name_in_the_mapping_form(caplog):
     assert "can not be used as a setting name" in caplog.text
 
 
-def test_apprise_template_bad_position_in_the_mapping_form(caplog):
+def test_apprise_template_mapping_form_bad_position(caplog):
     """The positional refusal also covers the mapping form."""
     with caplog.at_level(logging.ERROR):
         services = parse(
@@ -1244,7 +1249,7 @@ def test_apprise_template_vars_reports_a_disagreement(sent):
     assert apobj.template_vars()["shared"]["default"] is None
 
 
-def test_apprise_template_status_leaves_other_outcomes_alone():
+def test_apprise_template_status_other_outcomes():
     """Only a clean run and a no-match are reworded."""
     from apprise.apprise import _template_status
 
@@ -1378,3 +1383,396 @@ def test_apprise_template_email_address_as_a_setting(sent):
     service = next(apobj.find(template={"email": "you@example.ca"}))
 
     assert [target[1] for target in service.targets] == ["you@example.ca"]
+
+
+# --- The YAML reading helpers added alongside template support -----------
+#
+# These are small, defensive shapes that the ordinary configuration path
+# never reaches, so they are exercised directly.
+
+
+def yaml_root(content):
+    """Parse content into the node tree these helpers walk."""
+    from apprise.config.base import _AppriseYamlLoader
+
+    loader = _AppriseYamlLoader(content)
+    try:
+        return loader.get_single_node()
+
+    finally:
+        loader.dispose()
+
+
+def test_config_yaml_loader_needs_a_mapping():
+    """The loader is only ever asked to build a mapping."""
+    from yaml.constructor import ConstructorError
+    from yaml.nodes import ScalarNode
+
+    from apprise.config.base import _AppriseYamlLoader
+
+    loader = _AppriseYamlLoader("a: 1")
+    try:
+        with pytest.raises(ConstructorError):
+            loader.construct_mapping(ScalarNode("tag:yaml.org,2002:str", "x"))
+
+    finally:
+        loader.dispose()
+
+
+def test_config_yaml_rejects_an_unusable_key():
+    """Reject a YAML key that cannot be looked up."""
+    # A list written as a key; there is nothing to index a mapping by
+    assert ConfigBase.config_parse_yaml("? [a, b]\n: value\n") == ([], [])
+
+
+def test_config_yaml_section_lookup_needs_a_mapping():
+    """A document that is not a mapping has no sections to find."""
+    from apprise.config.base import _yaml_line_in_section, _yaml_section_node
+
+    root = yaml_root("- one\n- two\n")
+    assert _yaml_section_node(root, "template") is None
+    assert _yaml_line_in_section(root, "template", 1) is False
+
+
+def test_config_yaml_section_lookup_skips_other_sections():
+    """Only the section asked for is considered."""
+    from apprise.config.base import _yaml_line_in_section, _yaml_section_node
+
+    root = yaml_root("urls:\n  - json://localhost/\n")
+    assert _yaml_section_node(root, "template") is None
+
+    # A line belonging to another section is not claimed
+    assert _yaml_line_in_section(root, "template", 2) is False
+
+
+def test_config_yaml_section_lookup_finds_its_own_lines():
+    """A line inside the section is claimed; one outside is not."""
+    from apprise.config.base import _yaml_line_in_section
+
+    root = yaml_root("template:\n  - a\nurls:\n  - json://localhost/\n")
+    assert _yaml_line_in_section(root, "template", 2) is True
+    assert _yaml_line_in_section(root, "template", 4) is False
+
+
+def test_config_yaml_template_lines_handles_odd_sections():
+    """A section written as something other than a list or mapping."""
+    from apprise.config.base import _yaml_template_lines
+
+    # Plain text where a declaration list was expected
+    root = yaml_root("template: just-text\n")
+    section = root.value[0][1]
+    assert _yaml_template_lines(section) == {}
+
+
+def test_config_yaml_template_lines_skips_invalid_entries():
+    """Entries that are not names are left for the parser to report."""
+    from apprise.config.base import _yaml_template_lines
+
+    root = yaml_root("template:\n  - [nested, list]\n  - not-a-name\n  - ok\n")
+    section = root.value[0][1]
+
+    # Only the usable name is recorded; the rest are reported later
+    assert list(_yaml_template_lines(section)) == ["ok"]
+
+
+@pytest.mark.parametrize(
+    ("key", "expected"),
+    [
+        ("plain", "'plain'"),
+        ("json://user:pass@host/", "<service URL>"),
+        (7, "<int>"),
+        (None, "<NoneType>"),
+    ],
+)
+def test_config_yaml_key_label(key, expected):
+    """A duplicate key is named without giving away a credential."""
+    from apprise.config.base import _yaml_key_label
+
+    assert _yaml_key_label(key) == expected
+
+
+def test_config_yaml_key_label_shortens_a_long_key():
+    """A very long key is trimmed before it reaches a log line."""
+    from apprise.config.base import _yaml_key_label
+
+    label = _yaml_key_label("x" * 200)
+    assert label.endswith("...'")
+    assert len(label) < 80
+
+
+def test_config_query_tag_check_without_templates():
+    """With nothing templated there is no query to examine."""
+    from apprise.config.base import _templated_query_tag
+
+    assert _templated_query_tag({"qsd": {}}, None) is False
+    assert _templated_query_tag("not a mapping", None) is False
+
+
+def test_config_query_tag_check_skips_unusable_buckets(sent):
+    """A query bucket that is not a mapping is passed over."""
+    from apprise.config.base import _templated_query_tag
+    from apprise.utils.template import TemplatePlaceholderMap, TemplateSchema
+
+    placeholders = TemplatePlaceholderMap(TemplateSchema.parse(["t"]), "")
+    results = {"qsd": None, "qsd+": {}, "qsd-": {}, "qsd:": {}}
+    assert _templated_query_tag(results, placeholders) is False
+
+
+def test_apprise_template_rejects_invalid_supplied_name(sent):
+    """A name that is not text is refused rather than guessed at.
+
+    Nothing can be looked up by it, so the request is turned down
+    instead of being filled in from a malformed mapping.
+    """
+    apobj = load("template:\n  - t\nurls:\n  - json://user:${T}@host/\n")
+
+    with pytest.raises(AppriseTemplateError):
+        list(apobj.find(template={"t": "value", 7: "ignored"}))
+
+
+def run_cli(tmpdir, content, *args):
+    """Run a dry run against a configuration written to disk."""
+    from click.testing import CliRunner
+
+    from apprise import cli
+
+    config = tmpdir.join("apprise.yml")
+    config.write(content)
+    return CliRunner().invoke(
+        cli.main, ["-b", "x", f"--config={config!s}", "--dry-run", *args]
+    )
+
+
+def test_apprise_cli_dry_run_supplied_value(tmpdir):
+    """A value given on the command line is filled in for the preview."""
+    result = run_cli(
+        tmpdir,
+        "template:\n  - t\nurls:\n  - json://user:${T}@localhost/\n",
+        "--template-var",
+        "t=supplied",
+    )
+
+    # The entry resolved, so it has a real identifier rather than a notice
+    assert "missing value(s)" not in result.output
+    assert "- n/a -" not in result.output
+    assert result.exit_code == AppriseResultStatus.SUCCESS
+
+
+def test_apprise_cli_dry_run_reports_no_identifier(tmpdir):
+    """A service that keeps no stored data has no identifier to show."""
+    from apprise.plugins.custom_json import NotifyJSON
+
+    with mock.patch.object(NotifyJSON, "url_id", return_value=None):
+        result = run_cli(tmpdir, "urls:\n  - json://localhost/\n")
+
+    assert "- n/a -" in result.output
+    assert result.exit_code == AppriseResultStatus.SUCCESS
+
+
+def test_apprise_cli_dry_run_partial(tmpdir):
+    """Some entries are ready and some are still waiting on a value."""
+    result = run_cli(
+        tmpdir,
+        "template:\n  - t\n"
+        "urls:\n  - json://user:${T}@localhost/\n  - json://ready/\n",
+    )
+
+    assert "could not be resolved" in result.output
+    assert "1 of 2" in result.output
+
+    # The same outcome a real run would report
+    assert result.exit_code == AppriseResultStatus.PARTIAL
+
+
+def test_apprise_cli_dry_run_failure(tmpdir):
+    """Every entry is waiting on a value, so nothing would be sent."""
+    result = run_cli(
+        tmpdir, "template:\n  - t\nurls:\n  - json://user:${T}@localhost/\n"
+    )
+
+    assert result.exit_code == AppriseResultStatus.FAILURE
+
+
+def test_config_yaml_loader_failure_is_reported():
+    """A loader that never gets built leaves nothing to clean up."""
+    with mock.patch(
+        "apprise.config.base._AppriseYamlLoader",
+        side_effect=AttributeError("no loader"),
+    ):
+        assert ConfigBase.config_parse_yaml("urls:\n  - json://a/\n") == (
+            [],
+            [],
+        )
+
+
+def test_apprise_cli_details_lists_required_packages():
+    """A service that is switched off explains what it needs."""
+    from click.testing import CliRunner
+
+    from apprise import cli
+
+    entry = {
+        "service_name": "Example",
+        "service_url": "https://example.ca",
+        "setup_url": None,
+        "enabled": False,
+        "details": {"templates": ("{schema}://example",)},
+        "category": "native",
+        "attachment_support": False,
+        "protocols": ("example",),
+        "secure_protocols": None,
+        "requirements": {
+            "details": "Needs an extra package",
+            "packages_required": ["examplelib"],
+            "packages_recommended": [],
+        },
+    }
+
+    with mock.patch(
+        "apprise.Apprise.details",
+        return_value={"version": "1.0", "asset": {}, "schemas": [entry]},
+    ):
+        result = CliRunner().invoke(cli.main, ["--details"])
+
+    assert "Python Packages Required" in result.output
+    assert "examplelib" in result.output
+
+
+@pytest.mark.parametrize("supplied", ["a=b", ["a"], 7, ("a", "b")])
+def test_apprise_template_rejects_a_non_mapping(supplied):
+    """Values must arrive as name/value pairs."""
+    apobj = load("template:\n  - t\nurls:\n  - json://user:${T}@host/\n")
+
+    with pytest.raises(AppriseTemplateError):
+        list(apobj.find(template=supplied))
+
+
+def test_apprise_notify_failure_for_non_mapping():
+    """A bad value table fails the call instead of raising."""
+    apobj = load("template:\n  - t\nurls:\n  - json://user:${T}@host/\n")
+
+    result = apobj.notify(body="x", template="a=b")
+    assert not result
+    assert result.status == AppriseResultStatus.FAILURE
+
+
+def test_apprise_template_rejects_a_repeated_name():
+    """Two spellings of one name leave no way to tell which was meant."""
+    apobj = load("template:\n  - t\nurls:\n  - json://user:${T}@host/\n")
+
+    with pytest.raises(AppriseTemplateError):
+        list(apobj.find(template={"t": "one", "T": "two"}))
+
+
+def test_apprise_template_name_not_captured(logging_enabled, caplog):
+    """An unusable name is turned down before anything is written out."""
+    apobj = load("template:\n  - t\nurls:\n  - json://user:${T}@host/\n")
+
+    with caplog.at_level(logging.DEBUG), pytest.raises(AppriseTemplateError):
+        list(apobj.find(template={"t": "value", "unused\nwrite": "x"}))
+
+    assert "\nwrite" not in caplog.text
+
+
+def test_apprise_template_empty_environment_value(monkeypatch, sent):
+    """An empty environment value is used instead of the default."""
+    monkeypatch.setenv("APPRISE_TEMPLATE_T", "")
+    apobj = load(
+        "template:\n  t: fallback\nurls:\n  - json://user:${T}@localhost/\n"
+    )
+
+    service = next(apobj.find())
+    assert service.password == ""
+
+
+@pytest.mark.parametrize("entry", ["bad name=x", "=x", "a\nb=x", "a-b=x"])
+def test_apprise_template_cli_unusable_name(tmpdir, entry):
+    """A --template-var name has to look like a variable name."""
+    from click.testing import CliRunner
+
+    from apprise import cli
+
+    config = tmpdir.join("apprise.yml")
+    config.write("version: 2\nurls:\n  - json://localhost\n")
+
+    result = CliRunner().invoke(
+        cli.main, ["-b", "x", f"--config={config!s}", "-tv", entry]
+    )
+    assert result.exit_code == 2
+    assert "NAME=VALUE" in result.output
+
+
+def test_apprise_template_cli_repeated_name(tmpdir):
+    """The same name twice leaves no way to tell which value was meant."""
+    from click.testing import CliRunner
+
+    from apprise import cli
+
+    config = tmpdir.join("apprise.yml")
+    config.write(
+        "version: 2\ntemplate:\n  - t\n"
+        "urls:\n  - json://user:${T}@localhost/\n"
+    )
+
+    result = CliRunner().invoke(
+        cli.main,
+        ["-b", "x", f"--config={config!s}", "-tv", "t=one", "-tv", "T=two"],
+    )
+    assert result.exit_code == 2
+    assert "more than once" in result.output
+
+
+def test_apprise_template_reads_a_configuration_once():
+    """One find() visits each configuration source a single time."""
+    apobj = Apprise()
+    config = AppriseConfig(cache=False)
+    assert config.add_config(
+        "version: 2\ntemplate:\n  - t\nurls:\n  - json://localhost/?to=${T}\n",
+        format="yaml",
+    )
+    assert apobj.add(config)
+
+    source = config[0]
+    reads = []
+    original = source.read
+
+    def counted(*args, **kwargs):
+        reads.append(1)
+        return original(*args, **kwargs)
+
+    source.read = counted
+    assert len(list(apobj.find(template={"t": "x"}))) == 1
+    assert len(reads) == 1
+
+
+@pytest.mark.parametrize(
+    "supplied",
+    [
+        MappingProxyType({"t": "value"}),
+        UserDict({"t": "value"}),
+    ],
+)
+def test_apprise_template_accepts_any_mapping(supplied, sent):
+    """Any mapping is usable, not only a plain dictionary."""
+    apobj = load("template:\n  - t\nurls:\n  - json://localhost/?to=${T}\n")
+
+    service = next(apobj.find(template=supplied))
+    assert service is not None
+
+
+def test_apprise_template_cli_error_hides_value(tmpdir):
+    """A refused entry must not echo whatever followed the equals sign."""
+    from click.testing import CliRunner
+
+    from apprise import cli
+
+    config = tmpdir.join("apprise.yml")
+    config.write("version: 2\nurls:\n  - json://localhost\n")
+
+    result = CliRunner().invoke(
+        cli.main,
+        ["-b", "x", f"--config={config!s}", "-tv", "bad name=super-secret"],
+    )
+    assert result.exit_code == 2
+    assert "super-secret" not in result.output
+    assert "bad name" in result.output

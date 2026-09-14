@@ -32,6 +32,7 @@ parsed. Their values are then applied to the parsed fields.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import os
 import re
 import secrets
@@ -126,6 +127,46 @@ def validate_value(name: str, value: Any) -> str:
         )
 
     return value
+
+
+def validate_overrides(overrides: Any) -> dict:
+    """Check the values handed in for one call and return them.
+
+    A mapping of name/value pairs is the only accepted form.  Anything
+    else, along with a name that does not look like a variable name, is
+    turned down here so it can never reach a log entry or a URL.
+    """
+
+    if overrides is None:
+        # Nothing was supplied, which is perfectly normal.
+        return {}
+
+    if not isinstance(overrides, Mapping):
+        raise AppriseTemplateError(
+            "Template values must be supplied as a mapping of names to values."
+        )
+
+    seen = set()
+    for key in overrides:
+        if not isinstance(key, str) or not TEMPLATE_NAME_RE.match(key):
+            raise AppriseTemplateError(
+                "Invalid template variable name {!r}.".format(key)
+            )
+
+        name = normalize_name(key)
+        if name in seen:
+            # Two spellings of one name leave no way to tell which value
+            # was meant, so neither is used.
+            raise AppriseTemplateError(
+                "Template variable '{}' was supplied more than once.".format(
+                    name
+                ),
+                variable=name,
+            )
+
+        seen.add(name)
+
+    return overrides
 
 
 class TemplateVariable:
@@ -245,9 +286,9 @@ class TemplateSchema:
 class TemplatePlaceholderMap:
     """Swap declared variables for parse-safe placeholders and back.
 
-    A placeholder is a short run of letters and digits, which is legal
-    anywhere in a URL.  Swapping it in lets the URL parse normally
-    even though the real value is not known yet.
+    Each placeholder uses characters accepted throughout a URL. This lets the
+    URL parse normally before the real value is known, then restores or fills
+    the variable afterward.
     """
 
     def __init__(self, schema: TemplateSchema, content: str = ""):
@@ -303,7 +344,7 @@ class TemplatePlaceholderMap:
             return self._placeholder(name)
 
         # One pass only.  re.sub never looks at what it just wrote, so
-        # a value can not be expanded a second time.
+        # a value cannot be expanded a second time.
         return TEMPLATE_VAR_RE.sub(replace, text)
 
     def encode_obj(self, obj: Any, memo: Optional[dict] = None) -> Any:
@@ -500,14 +541,12 @@ def resolve_values(
         # Read the process environment unless the caller supplied an override.
         environ = os.environ
 
+    # Turn down anything that is not a usable mapping of name/value pairs.
+    overrides = validate_overrides(overrides)
+
     # Names handed in are matched without regard to case
     supplied = {}
-    for key, value in (overrides or {}).items():
-        if not isinstance(key, str) or not TEMPLATE_NAME_RE.match(key):
-            raise AppriseTemplateError(
-                "Invalid template variable name {!r}.".format(key)
-            )
-
+    for key, value in overrides.items():
         name = normalize_name(key)
         if name not in schema.variables:
             # One mapping can serve several configurations. This entry simply
@@ -528,8 +567,10 @@ def resolve_values(
             continue
 
         value = environ.get(TEMPLATE_ENV_PREFIX + name.upper())
-        if value:
-            # Environment values provide deployment-wide defaults.
+        if value is not None:
+            # Environment values provide deployment-wide defaults.  An
+            # empty one is a deliberate choice and is used as written,
+            # the same way an empty default or supplied value would be.
             results[name] = validate_value(name, value)
             continue
 
